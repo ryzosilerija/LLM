@@ -1,0 +1,3 @@
+numpy>=1.24
+matplotlib>=3.7   # optional, only for scripts/analyze.py charts
+# cupy-cuda12x    # optional, GPU backend (NLLM_BACKEND=cupy)

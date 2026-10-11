@@ -1,0 +1,10 @@
+{
+  "_comment": "Best LR per optimizer. Starting guesses: run scripts/lr_sweep.py --write to replace them. Keys 'config:<id>' override for a single config (e.g. no-norm runs).",
+  "sgd": 0.1,
+  "adamw": 0.02,
+  "lion": 0.001,
+  "muon": 0.02,
+  "normuon": 0.02,
+  "sophia": 0.001,
+  "shampoo": 0.02
+}
