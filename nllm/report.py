@@ -408,24 +408,68 @@ def chart_top_curves(plt, configs, k=8, save_path=None):
     return _embed(fig, plt, "validation curves of the top configs", save_path)
 
 
+OPT_ORDER = ["sgd", "adamw", "lion", "sophia", "shampoo", "muon", "normuon"]
+
+
+def _place_labels(ax, pts, xs, ys, fontsize=7.5):
+    """Greedy non-overlapping labels: try a few offsets around each point, skip if none fits."""
+    fig = ax.figure
+    fig.canvas.draw()
+    to_px = ax.transData.transform
+    taken = [(*(to_px((x, y)) - 4), *(to_px((x, y)) + 4)) for x, y in zip(xs, ys)]  # the dots themselves
+    offsets = [(5, 3), (5, -10), (-5, 3), (-5, -10), (0, 8), (0, -15), (9, -3), (-9, -3)]
+    w_char, h = fontsize * 0.62, fontsize * 1.1
+    for c, x, y in sorted(zip(pts, xs, ys), key=lambda t: t[2]):
+        px, py = to_px((x, y))
+        w = w_char * len(c["id"])
+        for dx, dy in offsets:
+            x0 = px + dx if dx >= 0 else px + dx - w
+            box = (x0, py + dy, x0 + w, py + dy + h)
+            if all(box[2] < b[0] or box[0] > b[2] or box[3] < b[1] or box[1] > b[3] for b in taken):
+                taken.append(box)
+                ax.annotate(c["id"], (x, y), xytext=(dx, dy), textcoords="offset points", fontsize=fontsize,
+                            color=INK, ha="left" if dx >= 0 else "right", va="bottom")
+                break
+
+
 def chart_scatter(plt, configs, xkey, xlabel, title, save_path=None, logx=False):
+    """Two panels: every config (left) and a zoom on the best region with every config labelled (right).
+    Colour = optimizer."""
     pts = [c for c in configs if c.get(xkey) is not None and c.get("bpc") is not None]
     if len(pts) < 2:
         return ""
-    fig, ax = plt.subplots(figsize=(7.5, 4.4))
-    _style(ax, "both")
-    ax.scatter([c[xkey] for c in pts], [c["bpc"] for c in pts], s=36, color=PALETTE[0],
-               edgecolor=SURFACE, linewidth=1.5, zorder=3)
-    for c in sorted(pts, key=lambda c: c["bpc"])[:5]:
-        ax.annotate(c["id"], (c[xkey], c["bpc"]), xytext=(4, 3), textcoords="offset points", fontsize=8,
-                    color=INK2)
-    if logx:
-        ax.set_xscale("log")
-    elif xkey == "tok_s":
-        ax.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("{x:,.0f}"))
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("validation BPC")
-    ax.set_title(title, loc="left", fontsize=11)
+    opts = [o for o in OPT_ORDER if any(c["optimizer"] == o for c in pts)] + \
+        sorted({c["optimizer"] for c in pts} - set(OPT_ORDER))
+    col = {o: PALETTE[i % len(PALETTE)] for i, o in enumerate(opts)}
+    best = min(c["bpc"] for c in pts)
+    zoom = [c for c in pts if c["bpc"] <= best + 0.2]
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 5.2), gridspec_kw={"width_ratios": [1, 1.35]})
+    for ax, sub in ((a1, pts), (a2, zoom)):
+        _style(ax, "both")
+        for o in opts:
+            s = [c for c in sub if c["optimizer"] == o]
+            if s:
+                ax.scatter([c[xkey] for c in s], [c["bpc"] for c in s], s=34 if ax is a1 else 44, color=col[o],
+                           edgecolor=SURFACE, linewidth=1.2, zorder=3, label=o)
+        if logx:
+            ax.set_xscale("log")
+        elif xkey == "tok_s":
+            ax.xaxis.set_major_formatter(plt.matplotlib.ticker.StrMethodFormatter("{x:,.0f}"))
+        ax.set_xlabel(xlabel)
+    a1.set_ylabel("validation BPC")
+    a1.set_title(f"{title}: all configs", loc="left", fontsize=11)
+    a2.set_title(f"Zoom: best configs (BPC ≤ {best + 0.2:.2f}), labelled by id", loc="left", fontsize=11)
+    if len(zoom) < len(pts):
+        a1.axhspan(best - 0.02, best + 0.2, color=INK2, alpha=0.08, zorder=0)
+    pad = 0.02
+    a2.set_ylim(best - pad, best + 0.2 + pad)
+    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    worst = sorted(pts, key=lambda c: -c["bpc"])[:6]
+    _place_labels(a1, worst, [c[xkey] for c in worst], [c["bpc"] for c in worst])
+    _place_labels(a2, zoom, [c[xkey] for c in zoom], [c["bpc"] for c in zoom])
+    h, l = a1.get_legend_handles_labels()
+    fig.legend(h, l, title="colour = optimizer", fontsize=9, title_fontsize=9, frameon=False, loc="lower center",
+               ncol=len(l), bbox_to_anchor=(0.5, 0.0))
     return _embed(fig, plt, title, save_path)
 
 
