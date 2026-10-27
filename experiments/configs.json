@@ -79,6 +79,7 @@
     {"id": "48", "group": "I", "optimizer": "shampoo", "activation": "sqrelu", "norm": "rmsnorm", "positional": "rope", "seeds": [1]},
     {"id": "49", "group": "I", "optimizer": "adamw", "activation": "silu", "norm": "rmsnorm", "positional": "rope", "seeds": [1]},
     {"id": "50", "group": "I", "optimizer": "lion", "activation": "sqrelu", "norm": "rmsnorm", "positional": "rope", "seeds": [1]},
+    {"id": "51", "group": "I", "optimizer": "normuon", "activation": "gelu", "norm": "layernorm", "positional": "rope", "seeds": [1, 2, 3]},
     {"id": "R01", "group": "R", "optimizer": "adamw", "activation": "silu", "norm": "scalenorm", "positional": "sinusoidal", "seeds": [1]},
     {"id": "R02", "group": "R", "optimizer": "normuon", "activation": "relu", "norm": "layernorm", "positional": "sinusoidal", "seeds": [1]},
     {"id": "R03", "group": "R", "optimizer": "shampoo", "activation": "gelu", "norm": "dyt", "positional": "sinusoidal", "seeds": [1]},

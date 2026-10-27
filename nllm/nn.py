@@ -109,7 +109,9 @@ class RMSNorm(Module):
 class DyT(Module):
     """Dynamic Tanh (Zhu et al., 2025): tanh(alpha * x) * gain + bias."""
 
-    def __init__(self, d, alpha0=0.5):
+    # alpha0 = 50 ~ 1 / (init activation scale 0.02). The paper default 0.5
+    # assumes O(1) activations; with GPT-2 init it shrinks the signal ~50x.
+    def __init__(self, d, alpha0=50.0):
         self.alpha = _const((1,), alpha0)
         self.gain = _const((d,), 1.0)
         self.bias = _const((d,), 0.0)
