@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from nllm import data as D  # noqa: E402
 from nllm import metrics as M  # noqa: E402
+from nllm.backend import xp  # noqa: E402
 from nllm.ngram import WittenBell  # noqa: E402
 
 
@@ -28,8 +29,8 @@ class Uniform:
         self.V = V
 
     def __call__(self, x):
-        x = np.asarray(x)
-        return Tn(np.zeros(x.shape + (self.V,)))
+        x = xp.asarray(x)
+        return Tn(xp.zeros(tuple(x.shape) + (self.V,)))
 
 
 def make_data():

@@ -20,6 +20,15 @@ if BACKEND == "cupy":
 
     def to_numpy(a):
         return xp.asnumpy(a)
+elif BACKEND == "strict":
+    # CPU stand-in for CuPy that rejects numpy/device mixing (for testing the GPU path without a GPU)
+    from . import _strict as xp
+
+    def scatter_add(target, idx, src):
+        np.add.at(target, idx, src)
+
+    def to_numpy(a):
+        return xp.asnumpy(a)
 else:
     xp = np
 

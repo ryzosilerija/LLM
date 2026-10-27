@@ -12,6 +12,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from nllm import tensor as T  # noqa: E402
+from nllm.backend import BACKEND, to_numpy, xp  # noqa: E402
 from nllm.optim import OPTIMIZERS, inverse_root, newton_schulz  # noqa: E402
 from nllm.tensor import Parameter, Tensor  # noqa: E402
 
@@ -47,7 +48,7 @@ def run(name, steps=300):
         if opt.needs_hessian and opt.t % opt.hessian_every == 0:
             # GNB analogue for squared loss: sample targets from N(pred, 1)
             _, pred = loss_fn()
-            ys = Tensor(pred.data + np.random.default_rng(opt.t).normal(size=pred.shape).astype(np.float32))
+            ys = Tensor(pred.data + xp.asarray(np.random.default_rng(opt.t).normal(size=pred.shape).astype(np.float32)))
             pred2 = T.tanh(X @ w1) @ w2
             d = pred2 - ys
             (d * d).mean().backward()
@@ -72,7 +73,7 @@ def test_all():
 
 def test_newton_schulz():
     G = np.random.default_rng(0).normal(size=(32, 64)).astype(np.float32)
-    s = np.linalg.svd(newton_schulz(G), compute_uv=False)
+    s = np.linalg.svd(to_numpy(newton_schulz(xp.asarray(G))), compute_uv=False)
     print(f"  ok  newton-schulz singular values in [{s.min():.2f}, {s.max():.2f}]")
     assert 0.5 < s.min() and s.max() < 1.3
 
@@ -80,13 +81,14 @@ def test_newton_schulz():
 def test_inverse_root():
     A = np.random.default_rng(0).normal(size=(10, 10))
     M = A @ A.T + np.eye(10)
-    R = inverse_root(M, 4, damping=0.0)
+    R = to_numpy(inverse_root(xp.asarray(M), 4, damping=0.0))
     err = np.abs(np.linalg.matrix_power(R, 4) @ M - np.eye(10)).max()
     print(f"  ok  inverse 4th root error {err:.1e}")
     assert err < 1e-6
 
 
 if __name__ == "__main__":
+    print(f"backend: {BACKEND}")
     test_newton_schulz()
     test_inverse_root()
     test_all()

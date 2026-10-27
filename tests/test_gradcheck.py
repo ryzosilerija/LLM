@@ -11,6 +11,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from nllm import tensor as T  # noqa: E402
+from nllm.backend import BACKEND, to_numpy, xp  # noqa: E402
 from nllm.nn import GPT  # noqa: E402
 from nllm.tensor import Parameter, Tensor, set_default_dtype  # noqa: E402
 
@@ -20,11 +21,9 @@ EPS, TOL = 1e-6, 1e-5
 
 
 def numeric_grad(f, p):
-    g = np.zeros_like(p.data)
-    it = np.nditer(p.data, flags=["multi_index"])
-    for _ in it:
-        i = it.multi_index
-        old = p.data[i]
+    g = np.zeros(p.shape)
+    for i in np.ndindex(*p.shape):
+        old = float(p.data[i])
         p.data[i] = old + EPS
         fp = f().item()
         p.data[i] = old - EPS
@@ -41,7 +40,7 @@ def check(name, f, params):
     worst = 0.0
     for p in params:
         num = numeric_grad(f, p)
-        err = np.abs(num - p.grad).max() / max(1.0, np.abs(num).max())
+        err = np.abs(num - to_numpy(p.grad)).max() / max(1.0, np.abs(num).max())
         worst = max(worst, err)
     assert worst < TOL, f"{name}: relative error {worst:.2e}"
     print(f"  ok  {name:<32} err={worst:.1e}")
@@ -58,11 +57,11 @@ def test_ops():
     pos = P(3, 4, positive=True)
     r = Tensor(RNG.normal(size=(3, 4)))  # fixed weights to reduce outputs to scalars
     rope_x = P(2, 3, 5, 4)
-    cos, sin = np.cos(RNG.normal(size=(5, 4))), np.sin(RNG.normal(size=(5, 4)))
-    mask = RNG.random((3, 4)) > 0.5
-    idx = np.array([[0, 2, 2], [1, 0, 3]])
+    cos, sin = xp.asarray(np.cos(RNG.normal(size=(5, 4)))), xp.asarray(np.sin(RNG.normal(size=(5, 4))))
+    mask = xp.asarray(RNG.random((3, 4)) > 0.5)
+    idx = xp.asarray(np.array([[0, 2, 2], [1, 0, 3]]))
     emb = P(4, 3)
-    logits, tgt = P(6, 5), np.array([0, 4, 2, 2, 1, 3])
+    logits, tgt = P(6, 5), xp.asarray(np.array([0, 4, 2, 2, 1, 3]))
     cases = {
         "add+broadcast": (lambda: ((a + c) * r).sum(), [a, c]),
         "sub/neg": (lambda: ((a - b) * r).sum(), [a, b]),
@@ -99,14 +98,14 @@ def test_models():
         + [(a, "rmsnorm", "rope") for a in ("relu", "silu", "sqrelu", "geglu", "swiglu")]
         + [("gelu", n, "learned") for n in ("rmsnorm", "dyt", "scalenorm", "none")]
     )
-    idx = RNG.integers(0, 7, size=(2, 6))
-    tgt = RNG.integers(0, 7, size=(12,))
+    idx = xp.asarray(RNG.integers(0, 7, size=(2, 6)))
+    tgt = xp.asarray(RNG.integers(0, 7, size=(12,)))
     for act, norm, pos in combos:
         cfg = dict(base, activation=act, norm=norm, positional=pos)
         model = GPT(cfg, vocab_size=7, seed=1)
         # bigger init so the check exercises non-trivial values
         for _, p in model.named_parameters():
-            p.data = p.data * 10 if p.ndim == 2 else p.data + RNG.normal(0, 0.1, size=p.shape)
+            p.data = p.data * 10 if p.ndim == 2 else p.data + xp.asarray(RNG.normal(0, 0.1, size=p.shape))
 
         def f():
             return T.cross_entropy(model(idx).reshape(12, 7), tgt)
@@ -116,22 +115,24 @@ def test_models():
         worst = 0.0
         for name, p in model.named_parameters():
             # check a random subset of entries per tensor to keep it fast
-            g_auto = p.grad
-            flat = p.data.reshape(-1)
+            g_auto = to_numpy(p.grad).reshape(-1)
+            flat = p.data.reshape(-1)  # a view: writing to it changes the parameter
             for j in RNG.choice(flat.size, size=min(6, flat.size), replace=False):
-                old = flat[j]
+                j = int(j)
+                old = float(flat[j])
                 flat[j] = old + EPS
                 fp = f().item()
                 flat[j] = old - EPS
                 fm = f().item()
                 flat[j] = old
                 num = (fp - fm) / (2 * EPS)
-                worst = max(worst, abs(num - g_auto.reshape(-1)[j]) / max(1.0, abs(num)))
+                worst = max(worst, abs(num - float(g_auto[j])) / max(1.0, abs(num)))
         assert worst < TOL, f"model {act}/{norm}/{pos}: err {worst:.2e}"
         print(f"  ok  model {act:>6}/{norm:<9}/{pos:<10} err={worst:.1e}")
 
 
 if __name__ == "__main__":
+    print(f"backend: {BACKEND}")
     print("op gradient checks")
     test_ops()
     print("model gradient checks")
