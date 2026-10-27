@@ -483,6 +483,64 @@ def main():
              fmt(agg(c, "batch_cps"), "{:,.0f}")] for c in order]
     md.append(table(["config", "generation ms/char", "forward ms (1 seq)", "batch chars/s"], rows))
 
+    extras = [(r, r["s"]["extra"]) for r in runs if r["s"].get("extra")]
+    md.append("\n### D3. Extra benchmarks (validation text, fixed seeds)\n\n")
+    if extras:
+        J["extra_benchmarks"] = {r["name"]: x for r, x in extras}
+        xc = [c for c in order if c.get("ece") is not None]
+        md.append("Mean ± std over seeds. ECE = calibration error (0 = confidence matches accuracy). Context gain = "
+                  "loss at positions 0–7 minus loss at positions 64+. Δ 2×/4× ctx = loss change on contexts longer "
+                  "than training (— for learned positions). Δ typos = loss increase with 10% random input "
+                  "characters. Sorted by validation loss.\n\n")
+
+        def mstd(c, k):
+            v, sd = c.get(k), c.get(k + "_std")
+            if v is None:
+                return "—"
+            f = R.METRIC[k][3]
+            return R.fmt(v, f) + ("" if sd is None else f" ± {sd:.3f}")
+
+        md.append(table(["config", "val loss"] + [R.METRIC[k][1] for k in R.EXTRA_KEYS],
+                        [[lab(c), fmt(c["val"])] + [mstd(c, k) for k in R.EXTRA_KEYS] for c in xc]))
+
+        md.append("\nBy component (mean over every config that uses it, other components vary, so this is "
+                  "descriptive, not a controlled comparison):\n\n")
+        for comp in ("positional", "optimizer", "norm", "activation"):
+            groups = {}
+            for c in xc:
+                groups.setdefault(c[comp], []).append(c)
+            rows = []
+            for g, cs in sorted(groups.items()):
+                cells = []
+                for k in R.EXTRA_KEYS:
+                    vals = [c[k] for c in cs if c.get(k) is not None]
+                    cells.append(R.fmt(st.mean(vals), R.METRIC[k][3]) if vals else "—")
+                rows.append([g, len(cs)] + cells)
+            md.append(table([comp, "configs"] + [R.METRIC[k][1] for k in R.EXTRA_KEYS], rows) + "\n")
+
+        top = [c for c in xc][:args.samples_top]
+        if top:
+            md.append("\nSampling settings for the top configs (distinct-2 / rep-4 / real-word rate, first seed):\n\n")
+            first = {c["id"]: next(r["s"]["extra"] for r in c["runs"] if r["s"].get("extra")) for c in top}
+            heads = [f"T={s['temperature']} k={s['top_k']}" for s in first[top[0]["id"]]["sampling"]]
+            md.append(table(["config"] + heads,
+                            [[lab(c)] + [f"{s['distinct_2']:.2f} / {s['rep_4']:.2f} / {s['real_word']:.0%}"
+                                         for s in first[c["id"]]["sampling"]] for c in top]))
+        prog = [(r, x["progression"]) for r, x in extras if len(x.get("progression") or []) > 1]
+        if prog:
+            md.append("\nTraining progression (val BPC / story-ending accuracy at each checkpoint):\n\n")
+            steps = sorted({p["step"] for _, ps in prog for p in ps})
+            md.append(table(["run"] + [f"{s:,}" for s in steps],
+                            [[r["name"]] + [next((f"{p['val_bpc']:.3f} / {p['story']:.0%}" for p in ps if p["step"] == s), "—")
+                                            for s in steps] for r, ps in prog]))
+        n_missing = sum(1 for r in runs if not r["s"].get("extra") and not r["s"].get("diverged"))
+        if n_missing:
+            md.append(f"\n{n_missing} finished runs have no extra benchmarks yet (`python scripts/extra_benchmarks.py "
+                      f"{args.runs}`).\n")
+        md.append("\nPer-run details and charts: `<run>/extra_benchmarks.html`.\n")
+    else:
+        md.append(f"Not run yet: `python scripts/extra_benchmarks.py {args.runs}`.\n")
+
     # ---------------------------------------------------------------- analysis
     md.append("\n# Analysis\n")
     md.append("\n## E. Leaderboard with significance vs baseline\n")
@@ -498,6 +556,7 @@ def main():
                                                             "train_min", "best_val", "best_step", "acc", "gap",
                                                             "full_bpc", "distinct_2", "rep_4", "real_word", "story",
                                                             "gen_ms", "batch_cps")}}
+        J["configs"][c["id"]]["extra"] = {k: c.get(k) for k in R.EXTRA_KEYS}
     md.append(table(["rank", "config", "seeds", "val loss", "BPC", "Δ vs 01", "p"], rows))
 
     md.append("\n## F. Stage 1: one change at a time vs baseline 01\n")

@@ -62,6 +62,9 @@ def load_run(d, with_metrics=True):
     if s is None or c is None:
         return None
     name = os.path.basename(os.path.normpath(d))
+    x = _json(os.path.join(d, "extra_benchmarks.json"))
+    if x:
+        s = dict(s, extra=x)  # read-only view; summary.json itself is not modified
     return {"dir": d, "name": name, "id": name.split("_")[0], "cfg": c, "s": s,
             "m": read_metrics(d) if with_metrics else []}
 
@@ -86,6 +89,14 @@ def _get(d, *keys):
     return _num(d)
 
 
+def _raw(d, *keys):
+    for k in keys:
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
+
+
 def _best_step(s):
     if s.get("best_val_step") is not None:
         return s["best_val_step"]
@@ -99,6 +110,34 @@ def _div(v, k):
 
 def _pct(v):
     return f"{v:.1%}"
+
+
+# ---- scalars from extra_benchmarks.json (scripts/extra_benchmarks.py)
+def _x_ctx_gain(s):
+    """Loss with almost no history (positions 0-7) minus loss with long history (positions 64+)."""
+    cp = _raw(s, "extra", "context_position")
+    if not cp or len(cp) < 65:
+        return None
+    return sum(cp[:8]) / 8 - sum(cp[64:]) / len(cp[64:])
+
+
+def _x_len(s, factor):
+    lg = _raw(s, "extra", "length_generalization") or {}
+    if not lg:
+        return None
+    L = sorted(lg, key=int)
+    base, k = lg.get(L[0]), str(int(L[0]) * factor)
+    if not base or not lg.get(k):
+        return None
+    return lg[k]["loss_all"] - base["loss_all"]
+
+
+def _x_typo(s, rate="0.10"):
+    rb = _raw(s, "extra", "robustness") or {}
+    return rb[rate] - rb["0.00"] if rate in rb and "0.00" in rb else None
+
+
+EXTRA_KEYS = ["ece", "ctx_gain", "len2x", "len4x", "typo10", "word_start", "inside_word"]
 
 
 # key, label, getter(summary), format, better
@@ -120,6 +159,14 @@ METRICS = [
     ("peak_mem", "peak MB", lambda s: _get(s, "peak_mem_mb"), "{:,.0f}", "low"),
     ("clip", "clip rate", lambda s: _get(s, "clip_rate"), _pct, None),
     ("params", "params", lambda s: _get(s, "n_params"), "{:,.0f}", None),
+    # extra benchmarks (present only for runs where scripts/extra_benchmarks.py was run)
+    ("ece", "ECE", lambda s: _get(s, "extra", "calibration", "ece"), "{:.3f}", "low"),
+    ("ctx_gain", "context gain", _x_ctx_gain, "{:.3f}", "high"),
+    ("len2x", "Δloss 2× ctx", lambda s: _x_len(s, 2), "{:+.3f}", "low"),
+    ("len4x", "Δloss 4× ctx", lambda s: _x_len(s, 4), "{:+.3f}", "low"),
+    ("typo10", "Δloss 10% typos", _x_typo, "{:+.3f}", "low"),
+    ("word_start", "loss word start", lambda s: _get(s, "extra", "char_classes", "word start", "loss"), "{:.3f}", "low"),
+    ("inside_word", "loss inside word", lambda s: _get(s, "extra", "char_classes", "inside word", "loss"), "{:.3f}", "low"),
 ]
 METRIC = {m[0]: m for m in METRICS}
 
@@ -809,6 +856,25 @@ def build_dashboard(runs_dir, out_html, charts_dir=None):
                "its full report. Primary metric: final validation loss on the fixed validation batches (decided "
                "before the experiments). Diverged runs are excluded from means.</p>")
     out.append(table(headers, rows, sortable=True))
+
+    xc = [c for c in configs if c.get("ece") is not None]
+    if xc:
+        out.append("<h2>Extra benchmarks</h2>")
+        out.append("<p class='note'>From scripts/extra_benchmarks.py, mean over seeds, validation text only. "
+                   "<b>ECE</b>: calibration error (0 = confidence matches accuracy). <b>context gain</b>: loss at "
+                   "positions 0–7 minus loss at positions 64+ (how much the model uses long history). "
+                   "<b>Δloss 2×/4× ctx</b>: loss change when run on contexts 2×/4× the training length "
+                   "(blank for learned positions, which can't). <b>Δloss 10% typos</b>: loss increase when 10% of "
+                   "input characters are random. Click a config for its full benchmark page.</p>")
+        rows = []
+        for c in xc:
+            rel = os.path.relpath(c['runs'][0]['dir'], root).replace(os.sep, '/')
+            row = [(f"<a href='{e(rel)}/extra_benchmarks.html'>{e(c['label'])}</a>", c["id"]),
+                   (fmt(c["val"], "{:.4f}"), "" if c["val"] is None else repr(c["val"]))]
+            for k in EXTRA_KEYS:
+                row.append((fmt(c[k], METRIC[k][3]), "" if c[k] is None else repr(c[k])))
+            rows.append(row)
+        out.append(table(["config", "val loss"] + [METRIC[k][1] for k in EXTRA_KEYS], rows, sortable=True))
 
     if plt:
         out.append("<h2>Charts</h2>")

@@ -74,6 +74,10 @@ DEFAULTS = {
     "gen_top_k": 20,
     "choice_items": 200,
     "write_report": True,
+    # checkpoints: save weights + validation loss + fixed-prompt samples after these steps
+    # (e.g. [500, 1000, 5000]); empty = none. Used to show how the model develops.
+    "checkpoint_steps": [],
+    "checkpoint_sample_chars": 200,
 }
 
 VAL_SEED, TRAIN_EVAL_SEED = 12345, 54321
@@ -138,6 +142,9 @@ def train(cfg, out_dir=None, verbose=True):
         os.makedirs(out_dir, exist_ok=True)
         json.dump(cfg, open(os.path.join(out_dir, "config.json"), "w"), indent=2)
         log_f = open(os.path.join(out_dir, "metrics.jsonl"), "w")
+        ck_log = os.path.join(out_dir, "checkpoints.jsonl")
+        if os.path.exists(ck_log):
+            os.remove(ck_log)
 
     lca = {g: 0.0 for g in group_names}
     init_loss = math.log(data.vocab_size)
@@ -150,6 +157,7 @@ def train(cfg, out_dir=None, verbose=True):
     peak_mem = M.memory_mb() or 0.0
     eval_time = 0.0
     last_val = last_train_eval = None
+    ckpt_steps = {int(x) for x in (cfg.get("checkpoint_steps") or []) if 0 < int(x) < cfg["max_steps"]}
     t0 = time.time()
 
     for step in range(cfg["max_steps"]):
@@ -251,6 +259,12 @@ def train(cfg, out_dir=None, verbose=True):
                 vl = f" val {row['val_loss']:.4f}" if "val_loss" in row else ""
                 print(f"  step {step:5d}  loss {loss_v:.4f}{vl}  lr {opt.lr:.2e}  |g| {gnorm:.3f}")
 
+        if out_dir and (step + 1) in ckpt_steps:
+            te = time.time()
+            _save_checkpoint(model, named, data, cfg, out_dir, step + 1, (step + 1) * tokens_per_step,
+                             time.time() - t0 - eval_time)
+            eval_time += time.time() - te
+
     wall = time.time() - t0
     steps_done = step + (0 if diverged else 1)
     final = None if diverged else evaluate(model, data, cfg)
@@ -305,10 +319,30 @@ def train(cfg, out_dir=None, verbose=True):
     return summary
 
 
-def load_model(run_dir):
-    """Rebuild a trained model from a run directory."""
+def _save_checkpoint(model, named, data, cfg, out_dir, step, tokens, train_s):
+    """Weights + validation metrics + fixed-prompt samples at one point of training.
+    Uses its own random streams, so training continues exactly as without it."""
+    ck_dir = os.path.join(out_dir, "checkpoints")
+    os.makedirs(ck_dir, exist_ok=True)
+    np.savez(os.path.join(ck_dir, f"step_{step:06d}.npz"), **{n: to_numpy(q.data) for n, q in named},
+             __chars__=np.array(json.dumps(data.chars)))
+    v = evaluate(model, data, cfg)
+    prompts = (cfg["gen_prompts"] or M.DEFAULT_PROMPTS)[:3]
+    samples = []
+    for i, p in enumerate(prompts):
+        ids, _ = M.generate(model, cfg["ctx"], data.encode(p), cfg["checkpoint_sample_chars"],
+                            cfg["gen_temperature"], cfg["gen_top_k"], seed=i)
+        samples.append({"prompt": p, "text": data.decode(ids)})
+    row = {"step": step, "tokens": tokens, "train_s": train_s, "val_loss": v["loss"], "val_bpc": v["bpc"],
+           "val_acc": v["acc"], "samples": samples}
+    with open(os.path.join(out_dir, "checkpoints.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def load_model(run_dir, weights=None):
+    """Rebuild a trained model from a run directory (optionally from a checkpoint .npz)."""
     cfg = {**DEFAULTS, **json.load(open(os.path.join(run_dir, "config.json")))}
-    blob = np.load(os.path.join(run_dir, "model.npz"))
+    blob = np.load(weights or os.path.join(run_dir, "model.npz"))
     chars = json.loads(str(blob["__chars__"]))
     model = GPT(cfg, len(chars), seed=0)
     for n, q in model.named_parameters():
